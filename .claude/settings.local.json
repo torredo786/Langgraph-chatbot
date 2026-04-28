@@ -2,7 +2,19 @@
   "permissions": {
     "allow": [
       "Bash(pip install *)",
-      "Bash(npm install *)"
+      "Bash(npm install *)",
+      "Bash(.venv/Scripts/pip install *)",
+      "Bash(.venv/Scripts/python -c \"from duckduckgo_search import DDGS; from tavily import TavilyClient; print\\('imports OK'\\)\")",
+      "Bash(python -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(python -m pip install ddgs)",
+      "Bash(python -c \"from ddgs import DDGS; print\\('ddgs OK'\\)\")",
+      "Bash(python -c \"from tavily import AsyncTavilyClient; print\\('tavily OK'\\)\")",
+      "Bash(python -c \"from langchain_openai import ChatOpenAI; print\\('langchain_openai OK'\\)\")",
+      "Bash(python -c \"from langgraph.graph import StateGraph; print\\('langgraph OK'\\)\")",
+      "Bash(python -m pip install tavily-python langchain-openai langgraph python-dotenv)",
+      "Bash(python -c ' *)",
+      "Bash(curl -s http://localhost:8000/api/config)",
+      "Bash(curl -s http://localhost:8000/health)"
     ]
   }
 }

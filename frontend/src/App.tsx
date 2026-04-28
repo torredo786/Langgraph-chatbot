@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { fetchLesson, fetchQuestion, fetchEvaluation } from './api'
+import { fetchLesson, fetchQuestion, fetchEvaluation, fetchConfig } from './api'
 
 type Phase =
+  | 'selecting_mode'
   | 'idle'
   | 'teaching'
   | 'awaiting_test'
@@ -10,6 +11,14 @@ type Phase =
   | 'evaluating'
   | 'awaiting_retry'
   | 'done'
+
+type SearchMode = 'llm' | 'duckduckgo' | 'tavily'
+
+const MODE_LABELS: Record<SearchMode, string> = {
+  llm: 'Direct LLM',
+  duckduckgo: 'DuckDuckGo',
+  tavily: 'Tavily Search',
+}
 
 type MCQData = {
   question: string
@@ -23,6 +32,7 @@ type Message = {
   role: 'tutor' | 'user'
   content: string
   isLoading?: boolean
+  isStreaming?: boolean
   mcq?: MCQData
   selectedOption?: number
 }
@@ -30,19 +40,29 @@ type Message = {
 let _id = 0
 const uid = () => String(++_id)
 
+const INITIAL_MESSAGES: Message[] = [
+  {
+    id: uid(),
+    role: 'tutor',
+    content: "Hi! I'm your AI tutor. Before we start, choose how you'd like me to look up information:",
+  },
+]
+
 export default function App() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: uid(),
-      role: 'tutor',
-      content: "Hi! I'm your AI tutor. What topic would you like to learn about today?",
-    },
-  ])
-  const [phase, setPhase] = useState<Phase>('idle')
+  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES)
+  const [phase, setPhase] = useState<Phase>('selecting_mode')
   const [input, setInput] = useState('')
   const [topic, setTopic] = useState('')
+  const [searchMode, setSearchMode] = useState<SearchMode>('llm')
   const [currentMcq, setCurrentMcq] = useState<MCQData | null>(null)
+  const [tavilyAvailable, setTavilyAvailable] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (phase === 'selecting_mode') {
+      fetchConfig().then(c => setTavilyAvailable(c.tavily_available))
+    }
+  }, [phase])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -58,6 +78,13 @@ export default function App() {
     )
   }, [])
 
+  const handleModeSelect = (mode: SearchMode) => {
+    setSearchMode(mode)
+    push({ role: 'user', content: MODE_LABELS[mode] })
+    push({ role: 'tutor', content: 'Great choice! What topic would you like to learn about today?' })
+    setPhase('idle')
+  }
+
   const handleTopicSubmit = async () => {
     const t = input.trim()
     if (!t) return
@@ -68,13 +95,25 @@ export default function App() {
     setPhase('teaching')
 
     try {
-      const { lesson } = await fetchLesson(t)
-      patchLast({ content: lesson, isLoading: false })
+      let lesson = ''
+      await fetchLesson(
+        t,
+        searchMode,
+        (statusMsg) => {
+          patchLast({ content: statusMsg, isLoading: true })
+        },
+        (token) => {
+          lesson += token
+          patchLast({ content: lesson, isLoading: false, isStreaming: true })
+        },
+      )
+      patchLast({ isStreaming: false })
       setPhase('awaiting_test')
     } catch (err) {
       patchLast({
         content: `Error: ${err instanceof Error ? err.message : String(err)}`,
         isLoading: false,
+        isStreaming: false,
       })
       setPhase('idle')
     }
@@ -86,7 +125,7 @@ export default function App() {
     push({ role: 'tutor', content: '', isLoading: true })
 
     try {
-      const mcq = await fetchQuestion(topic)
+      const mcq = await fetchQuestion(topic, searchMode)
       setCurrentMcq(mcq)
       patchLast({ content: mcq.question, mcq, isLoading: false })
       setPhase('awaiting_answer')
@@ -149,6 +188,14 @@ export default function App() {
     setPhase('done')
   }
 
+  const handleStartOver = () => {
+    setMessages([...INITIAL_MESSAGES])
+    setPhase('selecting_mode')
+    setTopic('')
+    setCurrentMcq(null)
+    setSearchMode('llm')
+  }
+
   return (
     <div className="app">
       <header className="header">
@@ -156,7 +203,9 @@ export default function App() {
           <div className="logo-icon">E</div>
           <span className="header-title">EduSmart Tutor</span>
         </div>
-        <span className="header-badge">OpenRouter</span>
+        {phase !== 'selecting_mode' && (
+          <span className="header-badge">{MODE_LABELS[searchMode]}</span>
+        )}
       </header>
 
       <main className="messages">
@@ -166,11 +215,18 @@ export default function App() {
             <div className="msg-body">
               <div className="bubble">
                 {msg.isLoading ? (
-                  <div className="dots">
-                    <span /><span /><span />
+                  <div className="loading-state">
+                    <div className="dots">
+                      <span /><span /><span />
+                    </div>
+                    {msg.content && (
+                      <span className="status-text">{msg.content}</span>
+                    )}
                   </div>
                 ) : (
-                  <span>{msg.content}</span>
+                  <span className={`lesson-text${msg.isStreaming ? ' lesson-text--streaming' : ''}`}>
+                    {msg.content}
+                  </span>
                 )}
               </div>
 
@@ -208,6 +264,39 @@ export default function App() {
       </main>
 
       <footer className="footer">
+        {phase === 'selecting_mode' && (
+          <div className="mode-row">
+            <button className="btn mode-btn" onClick={() => handleModeSelect('llm')}>
+              <span className="mode-icon">🤖</span>
+              <span className="mode-info">
+                <span className="mode-name">Direct LLM</span>
+                <span className="mode-desc">Uses AI knowledge only</span>
+              </span>
+            </button>
+            <button className="btn mode-btn" onClick={() => handleModeSelect('duckduckgo')}>
+              <span className="mode-icon">🦆</span>
+              <span className="mode-info">
+                <span className="mode-name">DuckDuckGo</span>
+                <span className="mode-desc">Searches the web (no API key)</span>
+              </span>
+            </button>
+            <button
+              className={`btn mode-btn${!tavilyAvailable ? ' mode-btn--disabled' : ''}`}
+              onClick={() => tavilyAvailable && handleModeSelect('tavily')}
+              disabled={!tavilyAvailable}
+              title={!tavilyAvailable ? 'Add TAVILY_API_KEY to .env to enable' : undefined}
+            >
+              <span className="mode-icon">🔍</span>
+              <span className="mode-info">
+                <span className="mode-name">Tavily Search</span>
+                <span className="mode-desc">
+                  {tavilyAvailable ? 'AI-optimized web search' : 'API key not configured'}
+                </span>
+              </span>
+            </button>
+          </div>
+        )}
+
         {phase === 'awaiting_test' && (
           <div className="action-row">
             <button className="btn primary" onClick={handleTestYes}>
@@ -252,21 +341,7 @@ export default function App() {
 
         {phase === 'done' && (
           <div className="action-row">
-            <button
-              className="btn primary"
-              onClick={() => {
-                setMessages([
-                  {
-                    id: uid(),
-                    role: 'tutor',
-                    content: "Welcome back! What topic would you like to learn about?",
-                  },
-                ])
-                setPhase('idle')
-                setTopic('')
-                setCurrentMcq(null)
-              }}
-            >
+            <button className="btn primary" onClick={handleStartOver}>
               Start over
             </button>
           </div>

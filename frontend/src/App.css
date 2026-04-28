@@ -159,11 +159,48 @@ body {
   border-top-right-radius: 0.25rem;
 }
 
+/* ── Loading state ── */
+.loading-state {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+}
+
+.status-text {
+  font-size: 0.8125rem;
+  color: #64748b;
+  font-style: italic;
+}
+
+/* ── Lesson text (multi-paragraph) ── */
+.lesson-text {
+  white-space: pre-wrap;
+}
+
+.lesson-text--streaming::after {
+  content: '▋';
+  display: inline-block;
+  color: #4f46e5;
+  animation: blink-cursor 0.8s step-end infinite;
+  margin-left: 1px;
+}
+
+@keyframes blink-cursor {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.tutor .bubble:has(.lesson-text--streaming) {
+  border-color: #c7d2fe;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.08);
+}
+
 /* ── Loading dots ── */
 .dots {
   display: flex;
   gap: 5px;
   padding: 3px 0;
+  flex-shrink: 0;
 }
 
 .dots span {
@@ -325,4 +362,73 @@ body {
 
 .btn.ghost:hover {
   background: #e2e8f0;
+}
+
+/* ── Mode selection ── */
+.mode-row {
+  display: flex;
+  gap: 0.625rem;
+  width: 100%;
+}
+
+.mode-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.75rem 1rem;
+  background: white;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s, box-shadow 0.12s;
+}
+
+.mode-btn:hover {
+  border-color: #4f46e5;
+  background: #eef2ff;
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
+}
+
+.mode-icon {
+  font-size: 1.375rem;
+  flex-shrink: 0;
+}
+
+.mode-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  min-width: 0;
+}
+
+.mode-name {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: #1e293b;
+  white-space: nowrap;
+}
+
+.mode-desc {
+  font-size: 0.7rem;
+  color: #64748b;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mode-btn--disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.mode-btn--disabled .mode-name {
+  color: #94a3b8;
+}
+
+.mode-btn--disabled .mode-desc {
+  color: #94a3b8;
 }

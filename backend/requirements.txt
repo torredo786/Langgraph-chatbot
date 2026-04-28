@@ -3,3 +3,5 @@ uvicorn[standard]
 langgraph
 langchain-openai
 python-dotenv
+ddgs
+tavily-python

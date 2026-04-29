@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app import build_graph, get_llm, get_search_context, stream_lesson  # noqa: F401
+from app import build_graph, build_followup_question_prompt, get_llm, get_search_context, stream_lesson  # noqa: F401
 
 api_key = os.getenv("OPENROUTER_API_KEY", "")
 model_name = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v3.2")
@@ -33,9 +33,16 @@ graph = build_graph(llm)
 
 app = FastAPI(title="EduSmart Tutor API")
 
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "")
+_allowed_origins = (
+    [o.strip() for o in _raw_origins.split(",") if o.strip()]
+    if _raw_origins
+    else ["http://localhost:5173", "http://127.0.0.1:5173"]
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -55,6 +62,13 @@ class EvaluateRequest(BaseModel):
     selected_index: int
     correct_index: int
     explanation: str
+
+
+class FollowupRequest(BaseModel):
+    topic: str
+    search_mode: str = "llm"
+    previous_question: str = ""
+    lesson_summary: str = ""
 
 
 @app.get("/health")
@@ -100,6 +114,40 @@ async def question(req: TopicRequest):
             "options": result["options"],
             "correct_index": result["correct_index"],
             "explanation": result["explanation"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/followup")
+async def followup(req: FollowupRequest):
+    try:
+        tavily_key = _get_tavily_key()
+        context = await get_search_context(req.topic, req.search_mode, tavily_key)
+        prompt = build_followup_question_prompt(
+            req.topic, context, req.previous_question, req.lesson_summary
+        )
+
+        def _invoke():
+            response = llm.invoke(prompt)
+            raw = response.content.strip()
+            cleaned = raw.replace("```json", "").replace("```", "").strip()
+            import json
+            parsed = json.loads(cleaned)
+            options = parsed.get("options", [])
+            if len(options) != 4:
+                raise ValueError("Model did not return exactly 4 options.")
+            correct_index = int(parsed.get("correct_index", -1))
+            if correct_index not in [0, 1, 2, 3]:
+                raise ValueError("Model returned an invalid correct_index.")
+            return parsed
+
+        parsed = await asyncio.to_thread(_invoke)
+        return {
+            "question": parsed["question"],
+            "options": parsed["options"],
+            "correct_index": parsed["correct_index"],
+            "explanation": parsed["explanation"],
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

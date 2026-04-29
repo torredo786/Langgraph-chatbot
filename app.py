@@ -71,22 +71,29 @@ async def get_search_context(
 # ── Prompt builders ───────────────────────────────────────────────────────────
 
 def build_teach_prompt(topic: str, context: str) -> str:
+    rules = (
+        "Write in plain prose only. "
+        "Do NOT use markdown: no #, ##, **, *, -, or any other markdown symbols. "
+        "Separate each paragraph with a blank line. "
+        "No headers, no bullet points, no bold or italic text."
+    )
     if context:
         return (
-            "You are an expert tutor. Based on the following search results from multiple articles, "
-            "write a comprehensive 3-paragraph explanation of the topic for a beginner.\n"
-            "- Paragraph 1: Introduce the topic and explain what it is.\n"
-            "- Paragraph 2: Explain how it works or its key concepts with examples.\n"
-            "- Paragraph 3: Describe real-world applications or why it matters.\n"
+            f"You are an expert tutor. {rules}\n\n"
+            "Based on the following search results, write a comprehensive 3-paragraph explanation for a beginner.\n"
+            "Paragraph 1: Introduce the topic and explain what it is.\n"
+            "Paragraph 2: Explain how it works or its key concepts with examples.\n"
+            "Paragraph 3: Describe real-world applications or why it matters.\n"
             "Synthesize the information from ALL articles. Be clear and engaging.\n\n"
             f"Topic: {topic}\n\n"
             f"Search Results:\n{context}"
         )
     return (
-        "You are an expert tutor. Write a comprehensive 3-paragraph explanation of the topic for a beginner.\n"
-        "- Paragraph 1: Introduce the topic and explain what it is.\n"
-        "- Paragraph 2: Explain how it works or its key concepts with examples.\n"
-        "- Paragraph 3: Describe real-world applications or why it matters.\n"
+        f"You are an expert tutor. {rules}\n\n"
+        "Write a comprehensive 3-paragraph explanation of the topic for a beginner.\n"
+        "Paragraph 1: Introduce the topic and explain what it is.\n"
+        "Paragraph 2: Explain how it works or its key concepts with examples.\n"
+        "Paragraph 3: Describe real-world applications or why it matters.\n"
         "Be clear and engaging.\n\n"
         f"Topic: {topic}"
     )
@@ -105,6 +112,28 @@ def build_question_prompt(topic: str, context: str) -> str:
         "}\n"
         "Rules: options must be exactly 4 items, correct_index must be 0-3.\n\n"
         f"Topic: {topic}{context_section}"
+    )
+
+
+def build_followup_question_prompt(topic: str, context: str, previous_question: str, lesson_summary: str) -> str:
+    context_section = f"\n\nSearch Results for context:\n{context}" if context else ""
+    prev_section = f"\n\nPrevious question already asked (do NOT repeat it):\n{previous_question}" if previous_question else ""
+    lesson_section = f"\n\nLesson already taught to the student:\n{lesson_summary[:1000]}" if lesson_summary else ""
+    return (
+        "The student just read a lesson and answered one quiz question about this topic. "
+        "Now create a NEW follow-up multiple-choice question that:\n"
+        "- Tests a DIFFERENT aspect or concept than the previous question\n"
+        "- Feels familiar to someone who just studied this topic (not too advanced)\n"
+        "- Checks whether the student retained what was taught in the lesson\n"
+        "Return ONLY valid JSON with this schema:\n"
+        '{\n'
+        '  "question": "string",\n'
+        '  "options": ["option A", "option B", "option C", "option D"],\n'
+        '  "correct_index": 0,\n'
+        '  "explanation": "short explanation of why the answer is correct"\n'
+        "}\n"
+        "Rules: options must be exactly 4 items, correct_index must be 0-3.\n\n"
+        f"Topic: {topic}{lesson_section}{prev_section}{context_section}"
     )
 
 

@@ -51,7 +51,7 @@ export async function fetchLesson(
     for (const line of lines) {
       if (line.startsWith(STATUS_PREFIX)) {
         onStatus(line.slice(STATUS_PREFIX.length).trim())
-      } else if (line) {
+      } else {
         onToken(line + '\n')
       }
     }
@@ -85,5 +85,24 @@ export function fetchEvaluation(
     selected_index,
     correct_index,
     explanation,
+  })
+}
+
+export function fetchFollowupQuestion(
+  topic: string,
+  searchMode: string,
+  previousQuestion: string,
+  lessonSummary: string,
+) {
+  return post<{
+    question: string
+    options: string[]
+    correct_index: number
+    explanation: string
+  }>('/api/followup', {
+    topic,
+    search_mode: searchMode,
+    previous_question: previousQuestion,
+    lesson_summary: lessonSummary,
   })
 }

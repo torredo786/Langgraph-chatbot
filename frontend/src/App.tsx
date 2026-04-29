@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { fetchLesson, fetchQuestion, fetchEvaluation, fetchConfig } from './api'
+import { fetchLesson, fetchQuestion, fetchEvaluation, fetchFollowupQuestion, fetchConfig } from './api'
 
 type Phase =
   | 'selecting_mode'
@@ -10,12 +10,15 @@ type Phase =
   | 'awaiting_answer'
   | 'evaluating'
   | 'awaiting_retry'
+  | 'followup_questioning'
+  | 'awaiting_followup_answer'
+  | 'followup_evaluating'
   | 'done'
 
 type SearchMode = 'llm' | 'duckduckgo' | 'tavily'
 
 const MODE_LABELS: Record<SearchMode, string> = {
-  llm: 'Direct LLM',
+  llm: 'LLM',
   duckduckgo: 'DuckDuckGo',
   tavily: 'Tavily Search',
 }
@@ -55,6 +58,7 @@ export default function App() {
   const [topic, setTopic] = useState('')
   const [searchMode, setSearchMode] = useState<SearchMode>('llm')
   const [currentMcq, setCurrentMcq] = useState<MCQData | null>(null)
+  const [lessonText, setLessonText] = useState('')
   const [tavilyAvailable, setTavilyAvailable] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -107,6 +111,7 @@ export default function App() {
           patchLast({ content: lesson, isLoading: false, isStreaming: true })
         },
       )
+      setLessonText(lesson)
       patchLast({ isStreaming: false })
       setPhase('awaiting_test')
     } catch (err) {
@@ -188,11 +193,63 @@ export default function App() {
     setPhase('done')
   }
 
+  const handleFollowup = async () => {
+    setPhase('followup_questioning')
+    push({ role: 'user', content: 'Ask me a follow-up question' })
+    push({ role: 'tutor', content: '', isLoading: true })
+
+    try {
+      const mcq = await fetchFollowupQuestion(
+        topic,
+        searchMode,
+        currentMcq?.question ?? '',
+        lessonText,
+      )
+      setCurrentMcq(mcq)
+      patchLast({ content: mcq.question, mcq, isLoading: false })
+      setPhase('awaiting_followup_answer')
+    } catch (err) {
+      patchLast({
+        content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+        isLoading: false,
+      })
+      setPhase('awaiting_retry')
+    }
+  }
+
+  const handleFollowupMcqSelect = async (selectedIndex: number) => {
+    if (!currentMcq || phase !== 'awaiting_followup_answer') return
+
+    setMessages(prev =>
+      prev.map(m => (m.mcq && m.selectedOption === undefined ? { ...m, selectedOption: selectedIndex } : m)),
+    )
+    push({ role: 'user', content: `Option ${selectedIndex + 1}: ${currentMcq.options[selectedIndex]}` })
+    push({ role: 'tutor', content: '', isLoading: true })
+    setPhase('followup_evaluating')
+
+    try {
+      const { feedback } = await fetchEvaluation(
+        selectedIndex,
+        currentMcq.correct_index,
+        currentMcq.explanation,
+      )
+      patchLast({ content: feedback, isLoading: false })
+      setPhase('awaiting_retry')
+    } catch (err) {
+      patchLast({
+        content: `Error: ${err instanceof Error ? err.message : String(err)}`,
+        isLoading: false,
+      })
+      setPhase('awaiting_retry')
+    }
+  }
+
   const handleStartOver = () => {
     setMessages([...INITIAL_MESSAGES])
     setPhase('selecting_mode')
     setTopic('')
     setCurrentMcq(null)
+    setLessonText('')
     setSearchMode('llm')
   }
 
@@ -243,12 +300,17 @@ export default function App() {
                     ]
                       .filter(Boolean)
                       .join(' ')
+                    const isActive = phase === 'awaiting_answer' || phase === 'awaiting_followup_answer'
                     return (
                       <button
                         key={i}
                         className={cls}
-                        disabled={answered || phase !== 'awaiting_answer'}
-                        onClick={() => handleMcqSelect(i)}
+                        disabled={answered || !isActive}
+                        onClick={() =>
+                          phase === 'awaiting_followup_answer'
+                            ? handleFollowupMcqSelect(i)
+                            : handleMcqSelect(i)
+                        }
                       >
                         <span className="opt-key">{String.fromCharCode(65 + i)}</span>
                         {opt}
@@ -269,7 +331,7 @@ export default function App() {
             <button className="btn mode-btn" onClick={() => handleModeSelect('llm')}>
               <span className="mode-icon">🤖</span>
               <span className="mode-info">
-                <span className="mode-name">Direct LLM</span>
+                <span className="mode-name">LLM</span>
                 <span className="mode-desc">Uses AI knowledge only</span>
               </span>
             </button>
@@ -277,7 +339,7 @@ export default function App() {
               <span className="mode-icon">🦆</span>
               <span className="mode-info">
                 <span className="mode-name">DuckDuckGo</span>
-                <span className="mode-desc">Searches the web (no API key)</span>
+                <span className="mode-desc">AI-optimized web search</span>
               </span>
             </button>
             <button
@@ -312,6 +374,9 @@ export default function App() {
           <div className="action-row">
             <button className="btn primary" onClick={handleRetryYes}>
               Learn another topic
+            </button>
+            <button className="btn secondary" onClick={handleFollowup}>
+              Ask a follow-up
             </button>
             <button className="btn ghost" onClick={handleRetryNo}>
               I'm done

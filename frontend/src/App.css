@@ -354,6 +354,16 @@ body {
   cursor: not-allowed;
 }
 
+.btn.secondary {
+  background: #ede9fe;
+  color: #4f46e5;
+  border: 1.5px solid #c4b5fd;
+}
+
+.btn.secondary:hover {
+  background: #ddd6fe;
+}
+
 .btn.ghost {
   background: #f1f5f9;
   color: #475569;

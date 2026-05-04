@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import sys
 
@@ -15,12 +16,23 @@ def _reload_env() -> None:
 
 _reload_env()
 
+from typing import List
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from app import build_graph, build_followup_question_prompt, get_llm, get_search_context, stream_lesson  # noqa: F401
+from app import (  # noqa: F401
+    build_followup_question_prompt,
+    build_graph,
+    build_hint_prompt,
+    build_related_topics_prompt,
+    build_summary_prompt,
+    get_llm,
+    get_search_context,
+    stream_lesson,
+)
 
 api_key = os.getenv("OPENROUTER_API_KEY", "")
 model_name = os.getenv("OPENROUTER_MODEL", "deepseek/deepseek-v3.2")
@@ -56,6 +68,7 @@ def _get_tavily_key() -> str:
 class TopicRequest(BaseModel):
     topic: str
     search_mode: str = "llm"
+    difficulty: str = "beginner"
 
 
 class EvaluateRequest(BaseModel):
@@ -69,6 +82,22 @@ class FollowupRequest(BaseModel):
     search_mode: str = "llm"
     previous_question: str = ""
     lesson_summary: str = ""
+    difficulty: str = "beginner"
+    was_correct: bool = True
+
+
+class SummaryRequest(BaseModel):
+    topic: str
+    lesson: str
+
+
+class HintRequest(BaseModel):
+    question: str
+    options: List[str]
+
+
+class RelatedRequest(BaseModel):
+    topic: str
 
 
 @app.get("/health")
@@ -87,8 +116,7 @@ async def teach(req: TopicRequest):
 
     async def generate():
         try:
-            async for token in stream_lesson(llm, req.topic, req.search_mode, tavily_key):
-                print(token)
+            async for token in stream_lesson(llm, req.topic, req.search_mode, tavily_key, req.difficulty):
                 yield token
         except Exception as e:
             yield f"__STATUS__:Error\n[Error: {e}]"
@@ -107,7 +135,12 @@ async def question(req: TopicRequest):
         context = await get_search_context(req.topic, req.search_mode, tavily_key)
         result = await asyncio.to_thread(
             graph.invoke,
-            {"next_step": "question", "topic": req.topic, "search_context": context},
+            {
+                "next_step": "question",
+                "topic": req.topic,
+                "search_context": context,
+                "difficulty": req.difficulty,
+            },
         )
         return {
             "question": result["question"],
@@ -125,14 +158,18 @@ async def followup(req: FollowupRequest):
         tavily_key = _get_tavily_key()
         context = await get_search_context(req.topic, req.search_mode, tavily_key)
         prompt = build_followup_question_prompt(
-            req.topic, context, req.previous_question, req.lesson_summary
+            req.topic,
+            context,
+            req.previous_question,
+            req.lesson_summary,
+            req.difficulty,
+            req.was_correct,
         )
 
         def _invoke():
             response = llm.invoke(prompt)
             raw = response.content.strip()
             cleaned = raw.replace("```json", "").replace("```", "").strip()
-            import json
             parsed = json.loads(cleaned)
             options = parsed.get("options", [])
             if len(options) != 4:
@@ -166,5 +203,57 @@ async def evaluate(req: EvaluateRequest):
             },
         )
         return {"feedback": result["feedback"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/summary")
+async def summary(req: SummaryRequest):
+    try:
+        prompt = build_summary_prompt(req.topic, req.lesson)
+
+        def _invoke():
+            response = llm.invoke(prompt)
+            raw = response.content.strip()
+            cleaned = raw.replace("```json", "").replace("```", "").strip()
+            return json.loads(cleaned)
+
+        takeaways = await asyncio.to_thread(_invoke)
+        if not isinstance(takeaways, list):
+            raise ValueError("Expected a JSON array")
+        return {"takeaways": [str(t) for t in takeaways[:5]]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/hint")
+async def hint(req: HintRequest):
+    try:
+        prompt = build_hint_prompt(req.question, req.options)
+
+        def _invoke():
+            return llm.invoke(prompt).content.strip()
+
+        hint_text = await asyncio.to_thread(_invoke)
+        return {"hint": hint_text}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/related")
+async def related(req: RelatedRequest):
+    try:
+        prompt = build_related_topics_prompt(req.topic)
+
+        def _invoke():
+            response = llm.invoke(prompt)
+            raw = response.content.strip()
+            cleaned = raw.replace("```json", "").replace("```", "").strip()
+            return json.loads(cleaned)
+
+        topics = await asyncio.to_thread(_invoke)
+        if not isinstance(topics, list):
+            raise ValueError("Expected a JSON array")
+        return {"topics": [str(t) for t in topics[:5]]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -5,7 +5,7 @@ from typing import AsyncIterator, List, TypedDict
 from ddgs import DDGS
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
-from tavily import AsyncTavilyClient, TavilyClient
+from tavily import AsyncTavilyClient
 
 
 class LearningState(TypedDict, total=False):
@@ -20,18 +20,15 @@ class LearningState(TypedDict, total=False):
     feedback: str
     search_mode: str
     search_context: str
+    difficulty: str
 
-
-# ── Synchronous DuckDuckGo (run via asyncio.to_thread) ────────────────────────
 
 def _ddg_search(topic: str) -> str:
     with DDGS() as d:
-        results = d.text(f"{topic} explained guide", max_results=8)
+        results = d.text(f"{topic} explained guide", max_results=5)
     snippets = [f"Article {i+1} - {r['title']}:\n{r['body'][:600]}" for i, r in enumerate(results)]
     return "\n\n".join(snippets)
 
-
-# ── Async search context fetcher ──────────────────────────────────────────────
 
 async def get_search_context(
     topic: str,
@@ -68,29 +65,42 @@ async def get_search_context(
     return ""
 
 
-# ── Prompt builders ───────────────────────────────────────────────────────────
+_DIFFICULTY_LESSON = {
+    "beginner": "Write for a complete beginner with no prior knowledge. Use simple language and relatable analogies.",
+    "intermediate": "Write for someone with basic familiarity. Use proper terminology and go deeper into mechanisms.",
+    "advanced": "Write for an experienced learner. Include technical depth, nuances, and edge cases.",
+}
 
-def build_teach_prompt(topic: str, context: str) -> str:
+_DIFFICULTY_QUESTION = {
+    "beginner": "Make the question straightforward — test recall of basic facts.",
+    "intermediate": "Make the question moderately challenging — test conceptual understanding and reasoning.",
+    "advanced": "Make the question challenging — test deep understanding, application, or subtle distinctions.",
+}
+
+
+def build_teach_prompt(topic: str, context: str, difficulty: str = "beginner") -> str:
     rules = (
         "Write in plain prose only. "
         "Do NOT use markdown: no #, ##, **, *, -, or any other markdown symbols. "
         "Separate each paragraph with a blank line. "
         "No headers, no bullet points, no bold or italic text."
     )
+    level = _DIFFICULTY_LESSON.get(difficulty, _DIFFICULTY_LESSON["beginner"])
     if context:
         return (
             f"You are an expert tutor. {rules}\n\n"
-            "Based on the following search results, write a comprehensive 3-paragraph explanation for a beginner.\n"
+            f"{level}\n\n"
+            "Based on the following search results, write a comprehensive 3-paragraph explanation.\n"
             "Paragraph 1: Introduce the topic and explain what it is.\n"
             "Paragraph 2: Explain how it works or its key concepts with examples.\n"
             "Paragraph 3: Describe real-world applications or why it matters.\n"
-            "Synthesize the information from ALL articles. Be clear and engaging.\n\n"
-            f"Topic: {topic}\n\n"
-            f"Search Results:\n{context}"
+            "Synthesize information from ALL articles. Be clear and engaging.\n\n"
+            f"Topic: {topic}\n\nSearch Results:\n{context}"
         )
     return (
         f"You are an expert tutor. {rules}\n\n"
-        "Write a comprehensive 3-paragraph explanation of the topic for a beginner.\n"
+        f"{level}\n\n"
+        "Write a comprehensive 3-paragraph explanation of the topic.\n"
         "Paragraph 1: Introduce the topic and explain what it is.\n"
         "Paragraph 2: Explain how it works or its key concepts with examples.\n"
         "Paragraph 3: Describe real-world applications or why it matters.\n"
@@ -99,10 +109,12 @@ def build_teach_prompt(topic: str, context: str) -> str:
     )
 
 
-def build_question_prompt(topic: str, context: str) -> str:
+def build_question_prompt(topic: str, context: str, difficulty: str = "beginner") -> str:
     context_section = f"\n\nSearch Results for context:\n{context}" if context else ""
+    level = _DIFFICULTY_QUESTION.get(difficulty, _DIFFICULTY_QUESTION["beginner"])
     return (
         "Create exactly one multiple-choice question about this topic.\n"
+        f"{level}\n"
         "Return ONLY valid JSON with this schema:\n"
         '{\n'
         '  "question": "string",\n'
@@ -115,16 +127,30 @@ def build_question_prompt(topic: str, context: str) -> str:
     )
 
 
-def build_followup_question_prompt(topic: str, context: str, previous_question: str, lesson_summary: str) -> str:
+def build_followup_question_prompt(
+    topic: str,
+    context: str,
+    previous_question: str,
+    lesson_summary: str,
+    difficulty: str = "beginner",
+    was_correct: bool = True,
+) -> str:
     context_section = f"\n\nSearch Results for context:\n{context}" if context else ""
     prev_section = f"\n\nPrevious question already asked (do NOT repeat it):\n{previous_question}" if previous_question else ""
     lesson_section = f"\n\nLesson already taught to the student:\n{lesson_summary[:1000]}" if lesson_summary else ""
+    level = _DIFFICULTY_QUESTION.get(difficulty, _DIFFICULTY_QUESTION["beginner"])
+    adapt = (
+        "The student answered the previous question CORRECTLY — make this one slightly more challenging."
+        if was_correct
+        else "The student answered the previous question INCORRECTLY — make this one simpler to reinforce the basics."
+    )
     return (
         "The student just read a lesson and answered one quiz question about this topic. "
         "Now create a NEW follow-up multiple-choice question that:\n"
         "- Tests a DIFFERENT aspect or concept than the previous question\n"
-        "- Feels familiar to someone who just studied this topic (not too advanced)\n"
         "- Checks whether the student retained what was taught in the lesson\n"
+        f"- {adapt}\n"
+        f"- {level}\n"
         "Return ONLY valid JSON with this schema:\n"
         '{\n'
         '  "question": "string",\n'
@@ -137,16 +163,41 @@ def build_followup_question_prompt(topic: str, context: str, previous_question: 
     )
 
 
-# ── Streaming lesson generator ────────────────────────────────────────────────
+def build_summary_prompt(topic: str, lesson: str) -> str:
+    return (
+        f"Based on the following lesson about '{topic}', extract exactly 4 key takeaways.\n"
+        "Return ONLY a JSON array of 4 concise strings, each under 15 words.\n"
+        'Example: ["First key point", "Second key point", "Third key point", "Fourth key point"]\n\n'
+        f"Lesson:\n{lesson[:2000]}"
+    )
+
+
+def build_hint_prompt(question: str, options: List[str]) -> str:
+    options_text = "\n".join(f"{chr(65 + i)}. {opt}" for i, opt in enumerate(options))
+    return (
+        f"A student is trying to answer this multiple-choice question:\n\n"
+        f"Question: {question}\n\nOptions:\n{options_text}\n\n"
+        "Give a short hint (1-2 sentences) that guides the student toward the correct answer "
+        "WITHOUT directly revealing it. Help them think about the right concept or eliminate wrong answers."
+    )
+
+
+def build_related_topics_prompt(topic: str) -> str:
+    return (
+        f"A student just finished learning about '{topic}'.\n"
+        "Suggest exactly 5 related topics they could explore next.\n"
+        "Return ONLY a JSON array of 5 short topic strings (2-5 words each).\n"
+        'Example: ["Topic one", "Topic two", "Topic three", "Topic four", "Topic five"]'
+    )
+
 
 async def stream_lesson(
     llm: ChatOpenAI,
     topic: str,
     mode: str,
     tavily_api_key: str,
+    difficulty: str = "beginner",
 ) -> AsyncIterator[str]:
-    # Immediately signal the browser that the response has started.
-    # For search modes, label what's happening so the client can show it.
     if mode == "duckduckgo":
         yield "__STATUS__:Searching DuckDuckGo...\n"
     elif mode == "tavily":
@@ -157,13 +208,11 @@ async def stream_lesson(
     if context and mode != "llm":
         yield "__STATUS__:Summarizing results...\n"
 
-    prompt = build_teach_prompt(topic, context)
+    prompt = build_teach_prompt(topic, context, difficulty)
     async for chunk in llm.astream(prompt):
         if chunk.content:
             yield chunk.content
 
-
-# ── LangGraph (question + evaluate) ──────────────────────────────────────────
 
 def build_graph(llm: ChatOpenAI):
     def router(state: LearningState) -> LearningState:
@@ -172,7 +221,8 @@ def build_graph(llm: ChatOpenAI):
     def question_node(state: LearningState) -> LearningState:
         topic = state.get("topic", "")
         context = state.get("search_context", "")
-        prompt = build_question_prompt(topic, context)
+        difficulty = state.get("difficulty", "beginner")
+        prompt = build_question_prompt(topic, context, difficulty)
         response = llm.invoke(prompt)
         raw = response.content.strip()
         cleaned = raw.replace("```json", "").replace("```", "").strip()

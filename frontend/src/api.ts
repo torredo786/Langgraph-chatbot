@@ -22,13 +22,14 @@ const STATUS_PREFIX = '__STATUS__:'
 export async function fetchLesson(
   topic: string,
   searchMode: string,
+  difficulty: string,
   onStatus: (msg: string) => void,
   onToken: (text: string) => void,
 ): Promise<void> {
   const res = await fetch('/api/teach', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ topic, search_mode: searchMode }),
+    body: JSON.stringify({ topic, search_mode: searchMode, difficulty }),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: 'Request failed' }))
@@ -44,7 +45,6 @@ export async function fetchLesson(
     if (done) break
     buffer += decoder.decode(value, { stream: true })
 
-    // Process complete lines for status messages; pass the rest as tokens
     const lines = buffer.split('\n')
     buffer = lines.pop() ?? ''
 
@@ -57,7 +57,6 @@ export async function fetchLesson(
     }
   }
 
-  // Flush any remaining content that didn't end with \n
   if (buffer) {
     if (buffer.startsWith(STATUS_PREFIX)) {
       onStatus(buffer.slice(STATUS_PREFIX.length).trim())
@@ -67,13 +66,13 @@ export async function fetchLesson(
   }
 }
 
-export function fetchQuestion(topic: string, searchMode: string) {
+export function fetchQuestion(topic: string, searchMode: string, difficulty: string) {
   return post<{
     question: string
     options: string[]
     correct_index: number
     explanation: string
-  }>('/api/question', { topic, search_mode: searchMode })
+  }>('/api/question', { topic, search_mode: searchMode, difficulty })
 }
 
 export function fetchEvaluation(
@@ -93,6 +92,8 @@ export function fetchFollowupQuestion(
   searchMode: string,
   previousQuestion: string,
   lessonSummary: string,
+  wasCorrect: boolean,
+  difficulty: string,
 ) {
   return post<{
     question: string
@@ -104,5 +105,19 @@ export function fetchFollowupQuestion(
     search_mode: searchMode,
     previous_question: previousQuestion,
     lesson_summary: lessonSummary,
+    was_correct: wasCorrect,
+    difficulty,
   })
+}
+
+export function fetchSummary(topic: string, lesson: string) {
+  return post<{ takeaways: string[] }>('/api/summary', { topic, lesson })
+}
+
+export function fetchHint(question: string, options: string[]) {
+  return post<{ hint: string }>('/api/hint', { question, options })
+}
+
+export function fetchRelated(topic: string) {
+  return post<{ topics: string[] }>('/api/related', { topic })
 }
